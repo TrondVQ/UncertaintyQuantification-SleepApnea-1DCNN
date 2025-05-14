@@ -43,6 +43,8 @@ The 1D-CNN architecture and primary data preprocessing pipeline implemented in t
 
 Please cite this original publication if you use or adapt the baseline model architecture or preprocessing methodology. This repository provides an implementation and further UQ analysis based on their described methods.
 
+* As declared in the thesis, Generative AI tools (ChatGPT Model-4o and Gemini 2.5 Pro Experimental) were used to support the writing, analysis, and code development processes.
+
 ## Data Usage - IMPORTANT
 
 Due to privacy regulations and the terms of use for the Sleep Heart Health Study (SHHS2) dataset, **no raw or processed patient data is included in this repository.**
