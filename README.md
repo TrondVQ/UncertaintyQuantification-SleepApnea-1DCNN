@@ -22,15 +22,18 @@ This repository contains the Python scripts to reproduce the core experiments of
 * Scripts for various analyses performed (e.g., patient-level, window-level correlations).
 
 **Key Scripts:**
-* `prepro_shhs.py`: Preprocesses individual SHHS2 EDF and XML files.
-* `prepdatasetml_to_numpy_files.py`: Finalizes the dataset into NumPy arrays for training/testing, including splitting and SMOTE balancing for the training set.
-* `AlCNN1D.py`: Defines and trains the baseline 1D-CNN model.
-* `de_train_cnn.py`: Trains the ensemble of 1D-CNN models for Deep Ensembles.
-* `uq_techniques.py`: Core functions for MC Dropout, Deep Ensemble predictions, and UQ metric calculations.
-* `evaluate_model.py`: Functions for standard classification model evaluation.
-* `mc_dropout_cnn.py`: Main script for running and evaluating MC Dropout.
-* `deep_ensemble_cnn.py`: Main script for running and evaluating Deep Ensembles.
-* Analysis scripts (e.g., `mcd_patient.py`, `DE_patient.py`, `0505UQ_graphs.py`, `0505UQ_pearson.py`, `mann_w_window.py`, etc.): Scripts for specific UQ result analyses. Note: These may require adaptation if run independently as they were used to generate specific figures/tables in the thesis from saved intermediate results.
+* `data_prepocessing/preprocess_shhs_raw.py`: Preprocesses individual SHHS2 EDF and XML files.
+* `data_prepocessing/prepare_numpy_datasets.py`: Finalizes the dataset into NumPy arrays for training/testing, including splitting and SMOTE balancing for the training set.
+* `models/cnn_baseline_train.py`: Defines and trains the baseline 1D-CNN model.
+* `models/train_deep_ensemble_cnns.py`: Trains the ensemble of 1D-CNN models for Deep Ensembles.
+* `uncertainty_quantification/uq_techniques.py`: Core functions for MC Dropout, Deep Ensemble predictions, and UQ metric calculations.
+* `evaluation/evaluate_classification.py`: Functions for standard classification model evaluation.
+* `uncertainty_quantification/analyze_mcd_patient_level.py`: Main script for running MC Dropout, generating detailed per-window UQ metrics, and evaluating.
+* `uncertainty_quantification/analyze_de_patient_level.py`: Main script for running Deep Ensembles, generating detailed per-window UQ metrics, and evaluating.
+* `uncertainty_quantification/aggregate_patient_uq_metrics.py`: Aggregates window-level UQ results to patient-level summaries.
+* `uncertainty_quantification/evaluate_mcd_global.py`: Script for evaluating MC Dropout with a focus on aggregated global metrics.
+* `uncertainty_quantification/evaluate_de_global.py`: Script for evaluating Deep Ensembles with a focus on aggregated global metrics.
+* Analysis scripts in `uq_analysis/` (e.g., `final_plot_uq_overview_figures.py`, `patient_accuracy_entropy_correlation.py`, `window_uncertainty_vs_correctness_mannwhitney.py`): Scripts for specific UQ result analyses and plotting. Note: These may require adaptation if run independently as they were used to generate specific figures/tables in the thesis from saved intermediate results.
 
 ## Methodology and Citation
 
@@ -47,7 +50,7 @@ Due to privacy regulations and the terms of use for the Sleep Heart Health Study
 To run the experiments, you will need to:
 1.  Obtain access to the SHHS2 dataset through the National Sleep Research Resource (NSRR): [https://sleepdata.org/datasets/shhs](https://sleepdata.org/datasets/shhs)
 2.  Download the EDF (polysomnography recordings) and XML (annotation) files.
-3.  Modify the paths in the preprocessing scripts (`prepro_shhs.py` and potentially `prepdatasetml_to_numpy_files.py`) to point to your local SHHS2 data directories. The scripts assume specific file naming conventions from the NSRR.
+3.  Modify the paths in the preprocessing scripts (`data_prepocessing/preprocess_shhs_raw.py` and potentially `data_prepocessing/prepare_numpy_datasets.py`) to point to your local SHHS2 data directories. The scripts assume specific file naming conventions from the NSRR.
 
 The code provided here is for the methodology; data procurement and management are the user's responsibility.
 
@@ -55,8 +58,8 @@ The code provided here is for the methodology; data procurement and management a
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/YOUR_USERNAME/YOUR_REPOSITORY_NAME.git](https://github.com/YOUR_USERNAME/YOUR_REPOSITORY_NAME.git)
-    cd YOUR_REPOSITORY_NAME
+    git clone [https://github.com/TrondVQ/UncertaintyQuantification-SleepApnea-1DCNN.git](https://github.com/TrondVQ/UncertaintyQuantification-SleepApnea-1DCNN.git)
+    cd UncertaintyQuantification-SleepApnea-1DCNN
     ```
 2.  **Create a Python virtual environment** (recommended):
     ```bash
@@ -75,25 +78,34 @@ The code provided here is for the methodology; data procurement and management a
 The general workflow is as follows. Please refer to individual scripts for more specific arguments or configurations. It's recommended to run scripts in sequence, as later scripts depend on the output of earlier ones.
 
 1.  **Preprocessing:**
-    * Run `prepro_shhs.py` (after configuring paths to your raw SHHS2 EDF and XML folders). This will process individual recordings and create intermediate CSV files (e.g., `SHHS2_ID_all.csv` as mentioned in `prepdatasetml_to_numpy_files.py`).
-    * Run `prepdatasetml_to_numpy_files.py` (after configuring input CSV path and output directory). This will generate the final `X_train_win_std_smote.npy`, `y_train_smote.npy`, `X_test_win_std_unbalanced.npy`, `y_test_unbalanced.npy`, `patient_ids_test_unbalanced.npy`, etc., in your specified `processed_datasets` directory.
+    * Run `python data_prepocessing/preprocess_shhs_raw.py` (after configuring paths to your raw SHHS2 EDF and XML folders). This will process individual recordings and create an intermediate CSV file (e.g., `processed_shhs2_data.csv`).
+    * Run `python data_prepocessing/prepare_numpy_datasets.py --input_csv ./processed_shhs2_data.csv --output_dir ./final_processed_datasets` (adjust paths as needed). This will generate the final `X_train_win_std_smote.npy`, `y_train_smote.npy`, `X_test_win_std_unbalanced.npy`, `y_test_unbalanced.npy`, `patient_ids_test_unbalanced.npy`, etc., in your specified output directory.
 
 2.  **Model Training:**
-    * Train the baseline 1D-CNN: `python AlCNN1D.py` (ensure `PROCESSED_DATA_DIR` points to the output of the previous step). This saves the model (e.g., `AlCNN1D_no_pool.keras`).
-    * Train the Deep Ensemble models: `python de_train_cnn.py` (ensure `PROCESSED_DATA_DIR` is set and `MODEL_SAVE_DIR_CNN` is configured). This saves multiple models.
+    * Train the baseline 1D-CNN: `python models/cnn_baseline_train.py --data_dir ./final_processed_datasets --model_save_path ./alarcon_cnn_model.keras` (ensure paths are correct).
+    * Train the Deep Ensemble models: `python models/train_deep_ensemble_cnns.py --data_dir ./final_processed_datasets --save_dir ./models/cnn_ensemble_no_pool` (ensure paths are correct).
 
-3.  **Uncertainty Quantification Evaluation:**
-    * Run MC Dropout evaluation: `python mc_dropout_cnn.py` (ensure `PROCESSED_DATA_DIR` and `CNN_MODEL_PATH` are correct).
-    * Run Deep Ensemble evaluation: `python deep_ensemble_cnn.py` (ensure `PROCESSED_DATA_DIR` and ensemble model paths/prefix are correct).
-    * Run patient-specific UQ analyses: `python mcd_patient.py`, `python DE_patient.py` (these scripts load data and models, and generate detailed CSV outputs for patient-level uncertainty).
+3.  **Uncertainty Quantification Evaluation (Detailed Per-Window Analysis):**
+    * Run MC Dropout evaluation: `python uncertainty_quantification/analyze_mcd_patient_level.py --data_dir ./final_processed_datasets --model_path ./alarcon_cnn_model.keras --output_csv_dir ./uq_results/mc_dropout --save_unbalanced_csv` (adjust paths and flags as needed).
+    * Run Deep Ensemble evaluation: `python uncertainty_quantification/analyze_de_patient_level.py --data_dir ./final_processed_datasets --model_dir ./models/cnn_ensemble_no_pool --output_csv_dir ./uq_results/deep_ensemble --save_unbalanced_csv` (adjust paths and flags as needed).
 
-4.  **Further Analysis Scripts:**
-    * Scripts like `0505UQ_graphs.py`, `0505UQ_pearson.py`, `mann_w_window.py` are designed to work with the CSV files generated by `mcd_patient.py` or `DE_patient.py`, or other intermediate result files. You may need to adjust paths within these scripts. *Note: As per the project's aim to share code and not generated plots, these scripts might need modification if you only intend to share the analytical logic rather than direct plot generation.*
+4.  **Further Aggregation and Analysis Scripts:**
+    * Aggregate patient-level metrics: `python uncertainty_quantification/aggregate_patient_uq_metrics.py --input_csv ./uq_results/mc_dropout/detailed_results_CNN_MCD_Unbalanced.csv --output_dir ./uq_results/mc_dropout/patient_level_summary` (example for MCD, adapt for DE).
+    * Scripts in `uq_analysis/` (e.g., `python uq_analysis/final_plot_uq_overview_figures.py`) are designed to work with the CSV files generated by the previous steps. You may need to adjust paths within these scripts. *Note: As per the project's aim to share code and not generated plots, these scripts might need modification if you only intend to share the analytical logic rather than direct plot generation.*
 
-**Example (Conceptual):**
+**Example (Conceptual Workflow):**
 ```bash
-# After setting up data and paths in scripts:
-python prepro_shhs.py --num_files 10 # Process a small number of files first
-python prepdatasetml_to_numpy_files.py --input_csv ./SHHS2_ID_all.csv --output_dir ./processed_datasets
-python AlCNN1D.py
-python mc_dropout_cnn.py
+# 1. Preprocessing
+python data_prepocessing/preprocess_shhs_raw.py --num_files 10 # Process a small number of files first
+python data_prepocessing/prepare_numpy_datasets.py --input_csv ./processed_shhs2_data.csv --output_dir ./final_processed_datasets
+
+# 2. Model Training
+python models/cnn_baseline_train.py
+python models/train_deep_ensemble_cnns.py
+
+# 3. UQ Evaluation (example for MCD)
+python uncertainty_quantification/analyze_mcd_patient_level.py --save_unbalanced_csv
+
+# 4. Further Analysis (example for MCD results)
+python uncertainty_quantification/aggregate_patient_uq_metrics.py --input_csv ./uq_results/mc_dropout/detailed_results_CNN_MCD_Unbalanced.csv --output_dir ./uq_results/mc_dropout/patient_level_summary
+# ... then run plotting scripts from uq_analysis/ using the generated CSVs
