@@ -3,7 +3,6 @@ from sklearn.metrics import (
     classification_report, roc_auc_score, confusion_matrix,
     cohen_kappa_score, matthews_corrcoef, precision_recall_curve, auc
 )
-# Removed complex type hints based on feedback for minimal changes
 
 def evaluate_classification_model(model, X_test, y_test, evaluation_description="Evaluation"):
     """

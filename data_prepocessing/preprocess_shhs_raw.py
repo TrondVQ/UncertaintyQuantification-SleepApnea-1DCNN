@@ -9,9 +9,10 @@ import argparse
 """
 This script preprocesses the SHHS2 dataset by combining EDF signal files
 and XML annotation files. It extracts specific physiological signals,
-resamples them to a target frequency, removes simple artifacts, and
-segments the data into fixed-size windows. Each window is then labeled
-based on overlap with apnea/hypopnea annotations from the XML file.
+resamples them to a target frequency, handles artifacts by interpolating
+out-of-range values for SaO2 and PR, and segments the data into
+fixed-size windows. Each window is then labeled based on overlap with
+apnea/hypopnea annotations from the XML file.
 The resulting segmented and labeled data is saved as a single CSV file.
 
 The script can process a limited number of files specified via a
@@ -31,18 +32,13 @@ Alarcon et al. Preprocessing Details (adapted for this script):
 - Window Size: 60 seconds
 - Window Overlap: 0 seconds (non-overlapping windows)
 - Patient Exclusion Criteria:
-    - Large number of missing values or artifacts (checked per signal).
+    - Large number of missing values or artifacts (checked per signal after
+      attempting interpolation for out-of-range SaO2 and PR values).
     - Recording duration (based on "Recording Start Time" event) less than 300 minutes.
 - Labeling: A window is labeled as apnea/hypopnea (1) if it overlaps
-  with an "Obstructive apnea" or "Hypopnea" event for at least 10 seconds.
-  Otherwise, it is labeled as normal (0).
-
-Initial SHHS2 Distribution (as mentioned in original comments):
-- Training: 994 patients with apnea, 230 without apnea.
-- Test: 132 patients without apnea, 31 with apnea.
-(Note: The script itself does not perform the balancing mentioned.)
+  with an "Obstructive apnea|Obstructive Apnea" or "Hypopnea|Hypopnea"
+  event for at least 10 seconds. Otherwise, it is labeled as normal (0).
 """
-
 
 # Paths to folders
 EDF_FOLDER =  ""  #"../SHHS2_dataset/edf_files"
@@ -304,7 +300,7 @@ def process_all_files(edf_folder, xml_folder, target_channels, target_rate=1, nu
             continue
 
         nsrr_id = edf_file.split("-")[1].split(".")[0]
-        xml_file = f"shhs1-{nsrr_id}-nsrr.xml"
+        xml_file = f"shhs2-{nsrr_id}-nsrr.xml"
         edf_file_path = os.path.join(edf_folder, edf_file)
         xml_file_path = os.path.join(xml_folder, xml_file)
 

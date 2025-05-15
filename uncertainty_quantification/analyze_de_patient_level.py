@@ -5,8 +5,6 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 from typing import List
-
-# Import the DE prediction function and the evaluation function
 from uq_techniques import deep_ensembles_predict, evaluate_uq_methods as evaluate_uq_from_preds
 
 # This file is designed to run the Deep Ensemble evaluation on the patient-level data
