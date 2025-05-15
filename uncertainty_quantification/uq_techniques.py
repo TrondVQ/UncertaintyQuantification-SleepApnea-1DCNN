@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
-
 import time
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional
+import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import entropy
 from tensorflow.keras.models import Model
@@ -9,682 +8,439 @@ import tensorflow as tf
 import os
 import pandas as pd
 
-# --- Configuration ---
-# Epsilon for numerical stability in logarithm calculations (e.g., entropy)
-EPSILON: float = 1e-10
-
-# Default number of stochastic forward passes for MC Dropout prediction
-DEFAULT_N_MC_PASSES: int = 50
-
-# Default number of bootstrap samples for Confidence Interval calculation
-DEFAULT_N_BOOTSTRAP: int = 100
-
-# Default significance level (alpha) for Confidence Interval calculation (e.g., 0.05 for 95% CI)
-DEFAULT_ALPHA: float = 0.05
-
 # ===================== Core Prediction Functions =====================
-
-def mc_dropout_predict(
-        model: tf.keras.Model,
-        x_test_data: np.ndarray, # Expected shape (samples, time_steps, features)
-        n_pred: int = DEFAULT_N_MC_PASSES
-) -> Optional[np.ndarray]:
+def mc_dropout_predict(model: tf.keras.Model , x_test_data: np.ndarray, n_pred: int = 50) -> np.ndarray:
     """
-    Performs Monte Carlo Dropout predictions using a Keras model with Dropout layers.
-
-    Activates Dropout layers during prediction (training=True).
-
-    Args:
-        model: A pre-trained TensorFlow Keras model with Dropout layers.
-               These layers must be configured to be active during prediction when training=True.
-        x_test_data: The input data for prediction. Expected shape
-                     (number of samples, time_steps, number of features).
-        n_pred: The number of stochastic forward passes to perform for each sample.
-
-    Returns:
-        A NumPy array of predictions from all passes.
-        Shape: (n_pred, number of samples, number of outputs).
-        Returns None if input data is empty or model is invalid.
+    :param model: Pre-trained Keras model with dropout layers
+    :param x_test_data: Evaluation data
+    :param n_pred: Number of stochastic forward passes
+    :return: Array of predictions (shape: [n_pred, samples, outputs])
     """
-    if model is None:
-        print("Error: No model provided for MC Dropout prediction.")
-        return None
-    if x_test_data is None or x_test_data.size == 0:
-        print("Error: Input data is empty for MC Dropout prediction.")
-        return None
-    if n_pred <= 0:
-        print(f"Error: Number of prediction passes must be positive, but got {n_pred}.")
-        return None
 
-    print(f"Starting MC Dropout prediction with {n_pred} passes...")
+    """MC Dropout predictions with timing."""
     start_time = time.time()
-    mc_predictions: List[np.ndarray] = []
-    try:
-        # Ensure Dropout layers are active during prediction
-        # For Sequential and functional models, training=True is the standard way to do this.
-        for _ in range(n_pred):
-            # Pass the data and explicitly set training=True
-            pred = model(x_test_data, training=True).numpy() # Get numpy output
-            mc_predictions.append(pred)
+    mc_predictions = np.stack([model(x_test_data, training=True) for pred in range(n_pred)])
+    print(f"MC Dropout completed in {time.time()-start_time:.1f}s ({n_pred} passes)")
+    return mc_predictions
 
-        # Stack predictions along a new axis (axis=0)
-        mc_predictions_stacked = np.stack(mc_predictions, axis=0) # Shape: (n_pred, samples, outputs)
-
-        print(f"MC Dropout prediction completed in {time.time()-start_time:.2f}s ({n_pred} passes)")
-        return mc_predictions_stacked
-
-    except Exception as e:
-        print(f"Error during MC Dropout prediction: {e}")
-        return None
-
-
-def deep_ensembles_predict(
-        ensemble_models: List[tf.keras.Model],
-        x_test_data: np.ndarray # Expected shape (samples, time_steps, features)
-) -> Optional[np.ndarray]:
-    """
-    Performs predictions using an ensemble of trained models.
-
-    Each model's prediction is obtained deterministically (Dropout layers are
-    typically inactive by default during model.predict, matching ensemble inference).
-
-    Args:
-        ensemble_models: A list of loaded TensorFlow Keras Model instances.
-        x_test_data: The input data for prediction. Expected shape
-                     (number of samples, time_steps, number of features).
-
-    Returns:
-        A NumPy array of predictions from all ensemble members.
-        Shape: (number of models, number of samples, number of outputs).
-        Returns None if input data is empty or ensemble list is empty.
-    """
-    if not ensemble_models:
-        print("Error: Ensemble models list is empty for Deep Ensemble prediction.")
-        return None
-    if x_test_data is None or x_test_data.size == 0:
-        print("Error: Input data is empty for Deep Ensemble prediction.")
-        return None
-
-    print(f"Starting Deep Ensemble prediction with {len(ensemble_models)} models...")
+def deep_ensembles_predict(ensemble_models: List, x_test_data: np.ndarray) -> np.ndarray:
+    """Deep ensemble predictions with timing."""
     start_time = time.time()
-    de_predictions: List[np.ndarray] = []
-    try:
-        # Use model.predict for deterministic inference from each ensemble member
-        for i, model in enumerate(ensemble_models):
-            # Use verbose=0 to suppress progress bar for each model
-            pred = model.predict(x_test_data, verbose=0)
-            de_predictions.append(pred)
-            if (i + 1) % 5 == 0 or (i + 1) == len(ensemble_models):
-                print(f"  Predicted with {i+1}/{len(ensemble_models)} models.")
-
-        # Stack predictions along a new axis (axis=0)
-        de_predictions_stacked = np.stack(de_predictions, axis=0) # Shape: (n_models, samples, outputs)
-
-        print(f"Deep Ensemble prediction completed in {time.time()-start_time:.2f}s ({len(ensemble_models)} models)")
-        return de_predictions_stacked
-
-    except Exception as e:
-        print(f"Error during Deep Ensemble prediction: {e}")
-        return None
-
+    de_predictions = np.stack([model.predict(x_test_data, verbose=0)
+                               for model in ensemble_models])
+    print(f"Deep Ensemble completed in {time.time()-start_time:.1f}s ({len(ensemble_models)} models)")
+    return de_predictions
 
 # ===================== Uncertainty Metrics =====================
+def safe_entropy(probs: np.ndarray, axis: int = 1, epsilon: float = 1e-10) -> np.ndarray:
+    """Numerically stable entropy calculation for probability arrays."""
+    clipped_probs = np.clip(probs, epsilon, 1 - epsilon)
+    return entropy(clipped_probs, axis=axis)
 
-def safe_entropy(probs: np.ndarray, axis: int = -1, epsilon: float = EPSILON) -> np.ndarray:
+def uq_evaluation_dist(uq_predictions: np.ndarray, y_true: np.ndarray) -> Dict[str, np.ndarray]:
     """
-    Numerically stable entropy calculation for probability arrays.
+    Computes uncertainty metrics from a distribution of predictions.
 
     Args:
-        probs: A NumPy array of probabilities. The calculation is performed along the specified axis.
-               If the shape along the axis is 1, binary entropy H(p, 1-p) is calculated.
-               Otherwise, standard categorical entropy -sum(p_i log2(p_i)) is calculated.
-        axis: The axis along which to calculate entropy. Defaults to the last axis.
-        epsilon: Small value for numerical stability in log calculation.
+        uq_predictions (np.ndarray): Array of predictions from multiple passes/models.
+                                     Shape: (n_models_or_passes, n_samples).
+                                     Assumes values are probabilities for the positive class (1).
+        y_true (np.ndarray): Ground truth labels. Shape: (n_samples,).
 
     Returns:
-        A NumPy array containing the entropy values. The shape is the input shape
-        with the specified axis removed.
+        Dictionary containing uncertainty metrics:
+        - 'mean_pred': Mean prediction probability per sample. Shape: (n_samples,).
+        - 'pred_variance': Predictive variance per sample. Shape: (n_samples,).
+        - 'total_pred_entropy': Average predictive entropy per sample (total uncertainty). Shape: (n_samples,).
+        - 'expected_aleatoric_entropy': Entropy of the mean prediction per sample (aleatoric approx.). Shape: (n_samples,).
+        - 'mutual_info': Mutual information per sample (epistemic approx.). Shape: (n_samples,).
+        - 'overall_mean_variance': Average predictive variance across all samples (scalar).
+        - 'mean_variance_class_0': Average predictive variance for true class 0 samples (scalar).
+        - 'mean_variance_class_1': Average predictive variance for true class 1 samples (scalar).
     """
-    # Clip probabilities to avoid log(0) or log(1) issues
-    clipped_probs = np.clip(probs, epsilon, 1.0 - epsilon)
+    # Ensure predictions are 2D (n_models_or_passes, n_samples)
+    predictions = np.squeeze(uq_predictions)
+    if predictions.ndim == 1: # Handle case of single model/pass input (variance/MI will be 0)
+        predictions = predictions.reshape(1, -1)
+    if predictions.shape[0] == 1:
+        print("Warning: Only one set of predictions provided. Variance and Mutual Info will be zero.")
 
-    if clipped_probs.shape[axis] == 1:
-        # Assuming input is shape (..., 1) for probability of class 1 in binary case
-        p1 = np.squeeze(clipped_probs, axis=axis) # Get probability of class 1
-        # Calculate binary entropy H(p, 1-p) = - (p log2(p) + (1-p) log2(1-p))
-        return - (p1 * np.log2(p1) + (1.0 - p1) * np.log2(1.0 - p1)) # Shape will be (...,)
-    else:
-        # Assuming input is shape (..., num_classes) where sum along axis is 1
-        # Calculate standard categorical entropy -sum(p_i log2(p_i))
-        return -np.sum(clipped_probs * np.log2(clipped_probs), axis=axis) # Shape will be (...,)
+    # Mean prediction probability for each sample
+    mean_pred = np.mean(predictions, axis=0) # Shape: (n_samples,)
 
+    # Predictive variance for each sample
+    pred_variance = np.var(predictions, axis=0) # Shape: (n_samples,)
 
-def uq_evaluation_dist(
-        uq_predictions: np.ndarray, # Expected shape (n_models_or_passes, n_samples, n_outputs)
-        y_true: np.ndarray         # Expected shape (n_samples,)
-) -> Optional[Dict[str, np.ndarray]]:
-    """
-    Computes per-sample uncertainty metrics from a distribution of predictions.
+    # Calculate entropy metrics (requires converting prob(class=1) to [prob(class=0), prob(class=1)])
+    # Entropy of the mean prediction (proxy for aleatoric uncertainty)
+    # Create probability array [prob_class0, prob_class1] for mean predictions
+    # H[E[p]]
+    mean_probs = np.stack([1 - mean_pred, mean_pred], axis=-1) # Shape: (n_samples, 2)
+    total_pred_entropy = safe_entropy(mean_probs, axis=1) # Shape: (n_samples,)
 
-    Args:
-        uq_predictions: Array of predictions from multiple passes/models.
-                        Expected shape: (n_models_or_passes, n_samples, n_outputs).
-                        Values assumed to be probabilities [0, 1]. For binary classification,
-                        n_outputs is typically 1 (prob of class 1) or 2 (prob of class 0, class 1).
-        y_true: Ground truth labels. Expected shape: (n_samples,).
+    # Expected Entropy (Mean of the entropies - Aleatoric proxy)
+    # E[H(p)]
+    entropies_per_prediction = []
+    for p in predictions: # Iterate through each pass/model
+        probs = np.stack([1 - p, p], axis=-1) # Shape: (n_samples, 2)
+        entropies_per_prediction.append(safe_entropy(probs, axis=1)) # Shape: (n_samples,)
+    expected_aleatoric_entropy = np.mean(entropies_per_prediction, axis=0) # Shape: (n_samples,)
 
-    Returns:
-        Dictionary containing per-sample uncertainty metric arrays:
-        - 'mean_pred': Mean prediction probability (for class 1 if binary) per sample. Shape: (n_samples,).
-        - 'pred_variance': Predictive variance (of probabilities) per sample. Shape: (n_samples,).
-        - 'total_pred_entropy': Total Predictive Entropy per sample. Shape: (n_samples,).
-        - 'expected_aleatoric_entropy': Expected Aleatoric Entropy per sample. Shape: (n_samples,).
-        - 'mutual_info': Mutual Information (Epistemic Uncertainty) per sample. Shape: (n_samples,).
-        Returns None if input data is invalid or calculations fail.
-    """
-    if uq_predictions is None or y_true is None:
-        print("Error: Input predictions or true labels are None for per-sample UQ metrics calculation.")
-        return None
-    if uq_predictions.ndim < 2:
-        print(f"Error: Expected prediction shape with at least 2 dimensions (passes/models, samples, ...), but got {uq_predictions.shape}.")
-        return None
+    # Mutual Information (Epistemic proxy) = Total - Aleatoric
+    # MI = H[E[p]] - E[H(p)]
+    mutual_info = np.maximum(total_pred_entropy - expected_aleatoric_entropy, 0) # Corrected order
 
-    n_passes_or_models = uq_predictions.shape[0]
-    n_samples = uq_predictions.shape[1]
-    n_outputs = uq_predictions.shape[2] if uq_predictions.ndim > 2 else 1 # Assume 1 output if 2D
+    # Overall mean variance across all samples
+    overall_mean_variance = np.mean(pred_variance)
 
-    if n_samples != len(y_true):
-        print(f"Error: Mismatch between prediction samples ({n_samples}) and label samples ({len(y_true)}) for per-sample UQ metrics.")
-        return None
-    if n_samples == 0:
-        print("Warning: No samples provided for per-sample UQ metrics calculation.")
-        # Return zeroed arrays with correct shapes (0,)
-        zero_arr_samples = np.zeros(n_samples)
-        return {
-            "mean_pred": zero_arr_samples,
-            "pred_variance": zero_arr_samples,
-            "total_pred_entropy": zero_arr_samples,
-            "expected_aleatoric_entropy": zero_arr_samples,
-            "mutual_info": zero_arr_samples
-        }
-    if n_passes_or_models == 0:
-        print("Warning: No prediction passes/models provided for per-sample UQ metrics calculation.")
-        # Cannot calculate variance or MI, return zeros for those, mean pred is NaN
-        nan_arr_samples = np.full(n_samples, np.nan)
-        zero_arr_samples = np.zeros(n_samples)
-        return {
-            "mean_pred": nan_arr_samples, # Cannot calculate mean without passes
-            "pred_variance": zero_arr_samples, # Variance is 0 with 0 passes
-            "total_pred_entropy": zero_arr_samples, # Entropy is 0 without predictions
-            "expected_aleatoric_entropy": zero_arr_samples,
-            "mutual_info": zero_arr_samples
-        }
+    # Class-specific mean variances
+    class0_mask = (y_true == 0)
+    class1_mask = (y_true == 1)
 
-    # Ensure probabilities are in [0, 1] range
-    uq_predictions_clipped = np.clip(uq_predictions, 0.0, 1.0)
+    mean_variance_class_0 = np.mean(pred_variance[class0_mask]) if np.any(class0_mask) else 0.0
+    mean_variance_class_1 = np.mean(pred_variance[class1_mask]) if np.any(class1_mask) else 0.0
 
-
-    try:
-        # 1. Mean prediction probability for each sample (Expected value E[Y|x])
-        # If binary (n_outputs=1), mean_pred is shape (n_samples,)
-        # If multi-class (n_outputs > 1), mean_pred is shape (n_samples, n_outputs)
-        mean_pred = np.mean(uq_predictions_clipped, axis=0) # Shape: (n_samples, n_outputs) or (n_samples,) if n_outputs=1
-
-        # 2. Predictive variance for each sample (Variance of the prediction probability)
-        # If binary (n_outputs=1), pred_variance is shape (n_samples,)
-        # If multi-class (n_outputs > 1), calculate variance independently for each output
-        # For binary, Var(p_hat) over passes/models
-        if n_outputs == 1:
-            pred_variance = np.var(uq_predictions_clipped.squeeze(axis=-1), axis=0) # Shape: (n_samples,)
-        else:
-            # Variance per class probability across passes/models
-            pred_variance = np.var(uq_predictions_clipped, axis=0) # Shape: (n_samples, n_outputs)
-            # A single variance value per sample might be desired, e.g., sum of variances
-            # pred_variance = np.sum(pred_variance, axis=-1) # Option: sum variances across classes
-
-        # 3. Total Predictive Entropy H(Y|x)
-        # For binary, approx H(E[Y|x]) where E[Y|x] is mean_pred (shape (n_samples,))
-        # For multi-class, calculate H(E[Y|x]), where E[Y|x] is mean_pred (shape (n_samples, n_outputs))
-        if n_outputs == 1: # Binary case, mean_pred is shape (n_samples,)
-            total_pred_entropy = safe_entropy(mean_pred.reshape(n_samples, 1), axis=-1, epsilon=EPSILON) # Shape: (n_samples,)
-        else: # Multi-class case, mean_pred is shape (n_samples, n_outputs)
-            total_pred_entropy = safe_entropy(mean_pred, axis=-1, epsilon=EPSILON) # Shape: (n_samples,)
-
-
-        # 4. Expected Aleatoric Entropy E[H(Y|x, w)]
-        # For binary, approx 1/N_passes * Sum(H(Y|x, wi))
-        # For multi-class, approx 1/N_passes * Sum(H(Y|x, wi))
-        # Calculate entropy for each pass/model's prediction, then average
-        # predictions_per_pass_or_model shape is (n_passes/models, n_samples, n_outputs)
-        entropies_per_prediction_source = safe_entropy(uq_predictions_clipped, axis=-1, epsilon=EPSILON) # Shape (n_passes_or_models, n_samples)
-        expected_aleatoric_entropy = np.mean(entropies_per_prediction_source, axis=0) # Shape (n_samples,)
-
-        # 5. Mutual Information (Epistemic Uncertainty) I(Y; w|x)
-        # MI = H(Y|x) - E[H(Y|x, w)] = Total Entropy - Expected Aleatoric Entropy
-        mutual_info = total_pred_entropy - expected_aleatoric_entropy
-        # Mutual Information should theoretically be non-negative. Clip to 0 to handle floating point errors.
-        mutual_info = np.maximum(mutual_info, 0) # Shape: (n_samples,)
-
-        # --- Return Metrics ---
-        # For binary case where pred_variance is (n_samples,), return directly
-        if n_outputs == 1:
-            return {
-                "mean_pred": mean_pred.squeeze(), # *** Squeeze mean_pred here ***
-                "pred_variance": pred_variance,
-                "total_pred_entropy": total_pred_entropy,
-                "expected_aleatoric_entropy": expected_aleatoric_entropy,
-                "mutual_info": mutual_info
-            }
-        # For multi-class case where pred_variance is (n_samples, n_outputs)
-        else:
-            return {
-                "mean_pred": mean_pred, # Keep multi-output shape
-                "pred_variance": pred_variance,
-                "total_pred_entropy": total_pred_entropy,
-                "expected_aleatoric_entropy": expected_aleatoric_entropy,
-                "mutual_info": mutual_info
-            }
-
-    except Exception as e:
-        print(f"Error during per-sample UQ metrics calculation in uq_evaluation_dist: {e}")
-        return None
-
+    return {
+        "mean_pred": mean_pred,
+        "pred_variance": pred_variance, # Per-sample variance
+        "total_pred_entropy": total_pred_entropy,   # Per-sample mean entropy (Total Approx.)
+        "expected_aleatoric_entropy": expected_aleatoric_entropy, # Per-sample entropy of mean (Aleatoric Approx.)
+        "mutual_info": mutual_info,     # Per-sample MI (Epistemic Approx.)
+        "overall_mean_variance": overall_mean_variance, # Overall average variance
+        "mean_variance_class_0": mean_variance_class_0,
+        "mean_variance_class_1": mean_variance_class_1
+    }
 
 # ===================== Confidence Intervals =====================
 
-def bootstrap_metrics(
-        uq_predictions_2d: np.ndarray, # Expected shape (n_models_or_passes, n_samples)
-        y_true: np.ndarray,           # Expected shape (n_samples,)
-        n_bootstrap: int = DEFAULT_N_BOOTSTRAP,
-        random_state: Optional[int] = None
-) -> Optional[List[Dict[str, float]]]:
+def bootstrap_metrics(uq_predictions: np.ndarray, y_true: np.ndarray,
+                      n_bootstrap: int = 100, random_state: Optional[int] = None) -> Optional[List[Dict]]:
     """
-    Performs bootstrap resampling on samples and recalculates aggregate UQ metrics
-    and accuracy for each bootstrap sample.
+    Performs bootstrap resampling on predictions and recalculates UQ metrics.
 
     Args:
-        uq_predictions_2d: Array of predictions (probabilities of positive class for binary).
-                           Expected shape: (n_models_or_passes, n_samples).
-                           Values assumed to be probabilities [0, 1].
-        y_true: Ground truth labels. Expected shape: (n_samples,).
-        n_bootstrap: Number of bootstrap samples to generate.
-        random_state: Seed for reproducibility of bootstrap resampling.
+        uq_predictions (np.ndarray): Shape (n_models_or_passes, n_samples).
+        y_true (np.ndarray): Shape (n_samples,).
+        n_bootstrap (int): Number of bootstrap samples.
+        random_state (Optional[int]): Seed for reproducibility.
 
     Returns:
-        List of dictionaries, each containing aggregate UQ metrics and accuracy
-        for one bootstrap sample. Returns None if input is invalid or
-        if no bootstrap results are generated due to errors.
-        Returns an empty list if n_bootstrap is 0 or no samples are available.
+        List of dictionaries, each containing UQ metrics for one bootstrap sample, or None.
     """
-    if uq_predictions_2d is None or y_true is None:
-        print("Error: Input predictions or true labels are None for bootstrapping.")
-        return None
-    if uq_predictions_2d.ndim != 2:
-        print(f"Error: Expected 2D prediction shape (n_passes/models, n_samples) for bootstrapping, but got {uq_predictions_2d.shape}.")
-        return None
-    if uq_predictions_2d.shape[1] != len(y_true):
-        print(f"Error: Mismatch between prediction samples ({uq_predictions_2d.shape[1]}) and label samples ({len(y_true)}) for bootstrapping.")
-        return None
-    n_samples = uq_predictions_2d.shape[1]
-    if n_samples == 0:
-        print("Warning: No samples provided for bootstrapping.")
-        return [] # Return empty list if no samples
-    if n_bootstrap <= 0:
-        print("Warning: n_bootstrap is 0 or negative. Skipping bootstrapping.")
-        return []
-
-
     if random_state is not None:
         np.random.seed(random_state)
 
-    bootstrap_results: List[Dict[str, float]] = []
+    n_samples = uq_predictions.shape[1]
+    bootstrap_results = []
 
-    print(f"Starting bootstrap resampling with {n_bootstrap} iterations on {n_samples} samples...")
-    start_time = time.time()
+    print(f"Starting bootstrap with {n_bootstrap} iterations...")
     for i in range(n_bootstrap):
-        # Sample indices with replacement
-        idx = np.random.choice(n_samples, n_samples, replace=True)
+        if (i + 1) % 10 == 0: # Print progress
+            print(f"  Bootstrap iteration {i+1}/{n_bootstrap}")
+        try:
+            # Sample indices with replacement
+            idx = np.random.choice(n_samples, n_samples, replace=True)
+            # Select predictions and labels for this bootstrap sample
+            bs_preds = uq_predictions[:, idx]
+            bs_y = y_true[idx]
+            # Recalculate UQ metrics for the bootstrap sample
+            bs_uq_metrics = uq_evaluation_dist(bs_preds, bs_y)
+            if bs_uq_metrics: # Check if calculation succeeded
+                # We need the *aggregate* metrics for CI calculation
+                agg_metrics = {
+                    "overall_mean_variance": bs_uq_metrics["overall_mean_variance"],
+                    "mean_variance_class_0": bs_uq_metrics["mean_variance_class_0"],
+                    "mean_variance_class_1": bs_uq_metrics["mean_variance_class_1"],
+                    "mean_total_pred_entropy": np.mean(bs_uq_metrics["total_pred_entropy"]), # Mean of per-sample metric
+                    "mean_expected_aleatoric_entropy": np.mean(bs_uq_metrics["expected_aleatoric_entropy"]),
+                    "mean_mutual_info": np.mean(bs_uq_metrics["mutual_info"]),
+                }
+                bootstrap_results.append(agg_metrics)
+            else:
+                print(f"Warning: Skipping bootstrap iteration {i+1} due to calculation error.")
 
-        # Select predictions and labels for this bootstrap sample
-        bs_preds_2d = uq_predictions_2d[:, idx] # Shape: (n_models_or_passes, n_samples)
-        bs_y = y_true[idx]                 # Shape: (n_samples,)
+        except Exception as e:
+            print(f"Error during bootstrap iteration {i+1}: {e}")
+            # Continue to next iteration if one fails, or return None
+            # return None # Option: Fail completely if one iteration errors
 
-        # Recalculate *per-sample* UQ metrics for this bootstrap sample
-        # uq_evaluation_dist expects (n_passes/models, n_samples, 1), so add back the dim for binary
-        # Need to handle multi-class case too if uq_evaluation_dist supports it
-        # Assuming binary (n_outputs=1) for bootstrapping context
-        bs_uq_metrics_per_sample = uq_evaluation_dist(bs_preds_2d[:, :, np.newaxis], bs_y)
-
-        if bs_uq_metrics_per_sample: # Check if per-sample calculation succeeded
-            try:
-                # Calculate *aggregate* metrics for this bootstrap sample's per-sample results
-                # These are the scalars we want CIs for
-                bs_agg_metrics: Dict[str, float] = {}
-
-                # Include aggregate of all metrics returned by uq_evaluation_dist
-                for metric_name, metric_values in bs_uq_metrics_per_sample.items():
-                    if metric_values.ndim == 1: # Aggregated if per-sample value is scalar (e.g., variance for binary)
-                        bs_agg_metrics[f"overall_mean_{metric_name}"] = float(np.mean(metric_values))
-                        # Add class-specific means for variance if available and binary
-                        if metric_name == "pred_variance" and np.any(bs_y == 0):
-                            bs_agg_metrics["mean_variance_class_0"] = float(np.mean(metric_values[bs_y == 0]))
-                        if metric_name == "pred_variance" and np.any(bs_y == 1):
-                            bs_agg_metrics["mean_variance_class_1"] = float(np.mean(metric_values[bs_y == 1]))
-
-                    # Add handling for multi-output metrics if needed (e.g., variance shape (samples, outputs))
-                    # elif metric_values.ndim == 2 and metric_name == "pred_variance":
-                    #    bs_agg_metrics["overall_mean_pred_variance_sum"] = float(np.mean(np.sum(metric_values, axis=-1))) # Example aggregate sum
-
-                # Also include performance metric (accuracy) for CI
-                # Accuracy based on mean prediction probability (>0.5 threshold)
-                bs_mean_pred = bs_uq_metrics_per_sample.get("mean_pred") # Get mean_pred from per-sample metrics
-                if bs_mean_pred is not None and bs_mean_pred.ndim == 1: # Ensure it's the per-sample scalar mean prob
-                    bs_predicted_labels = (bs_mean_pred > 0.5).astype(int)
-                    bs_agg_metrics["overall_accuracy"] = float(np.mean(bs_predicted_labels == bs_y))
-                else:
-                    # If mean_pred is not a scalar per sample (e.g., multi-class (samples, outputs)),
-                    # accuracy calculation would need adjustment, or skip adding accuracy CI here.
-                    print(f"Warning: Cannot calculate scalar overall accuracy for bootstrap due to mean_pred shape {bs_mean_pred.shape if bs_mean_pred is not None else 'None'}. Skipping accuracy CI.")
-
-
-                bootstrap_results.append(bs_agg_metrics)
-
-            except Exception as e:
-                print(f"Warning: Error calculating aggregate metrics for bootstrap iteration {i+1}: {e}. Skipping iteration.")
-                # Continue to next iteration if one fails
-
-        else:
-            print(f"Warning: Per-sample UQ metrics calculation failed for bootstrap iteration {i+1}. Skipping iteration.")
-
-
-        if (i + 1) % 10 == 0 or (i + 1) == n_bootstrap: # Print progress every 10 iterations or at the end
-            print(f"  Completed {i+1}/{n_bootstrap} iterations.")
-
-    if not bootstrap_results and n_bootstrap > 0:
-        print("Error: No valid bootstrap results generated.")
+    if not bootstrap_results:
+        print("Error: No bootstrap results generated.")
         return None
-    elif not bootstrap_results and n_bootstrap == 0:
-        print("Bootstrap skipped as n_bootstrap was 0.")
-        return []
 
-
-    print(f"Bootstrap finished in {time.time()-start_time:.2f}s.")
+    print("Bootstrap finished.")
     return bootstrap_results
 
 
-def compute_confidence_intervals(
-        bootstrap_results: List[Dict[str, float]],
-        alpha: float = DEFAULT_ALPHA
-) -> Dict[str, float]:
+def compute_confidence_intervals(bootstrap_results: List[Dict], alpha: float = 0.05) -> Dict[str, float]:
     """
-    Calculate mean, lower, and upper confidence intervals for scalar metrics
-    from bootstrap results using the percentile method.
+    Calculate confidence intervals (lower, upper bounds) for scalar metrics
+    from bootstrap results.
 
     Args:
-        bootstrap_results: List of dictionaries, each containing aggregate metrics
-                           from one bootstrap sample (output of bootstrap_metrics).
-                           Expected values are floats.
-        alpha: The significance level (e.g., 0.05 for a 95% confidence interval).
+        bootstrap_results (List[Dict]): List of dictionaries from bootstrap_metrics.
+        alpha (float): Significance level (e.g., 0.05 for 95% CI).
 
     Returns:
-        Dictionary containing the mean, lower CI bound, and upper CI bound
-        for each metric found in the bootstrap results. Keys are formatted as
-        '{metric_name}_mean', '{metric_name}_ci_lower', '{metric_name}_ci_upper'.
-        Returns an empty dictionary if no bootstrap results are provided.
+        Dictionary containing the mean, lower CI, and upper CI for each metric.
     """
-    ci_results: Dict[str, float] = {}
+    ci_results = {}
     if not bootstrap_results:
-        print("Warning: No bootstrap results provided for CI calculation.")
         return ci_results
 
-    # Get metric names from the keys of the dictionaries in the list
-    # Assuming all dictionaries have the same keys (based on how bootstrap_metrics creates them)
+    # Get metric names from the first result dictionary
     metric_names = bootstrap_results[0].keys()
-    print(f"Calculating confidence intervals for metrics: {list(metric_names)}")
 
     for metric_name in metric_names:
         try:
             # Extract the values for this metric across all bootstrap samples
-            values = [m.get(metric_name) for m in bootstrap_results if m.get(metric_name) is not None] # Filter out None values
-
-            if not values:
-                print(f"Warning: No valid values found for metric '{metric_name}' across bootstrap samples. Skipping CI calculation.")
-                continue
-            if len(values) < 2:
-                print(f"Warning: Need at least 2 bootstrap samples to calculate CI for '{metric_name}', found {len(values)}. Skipping CI.")
-                ci_results[f"{metric_name}_mean"] = float(np.mean(values)) # Still include the mean
-                continue
-
+            values = [m[metric_name] for m in bootstrap_results]
 
             # Calculate mean and percentile-based confidence intervals
-            # Use float() to ensure the result is a standard float, not a numpy scalar
-            ci_results[f"{metric_name}_mean"] = float(np.mean(values))
+            ci_results[f"{metric_name}_mean"] = float(np.mean(values)) # Use float() to ensure scalar
             ci_results[f"{metric_name}_ci_lower"] = float(np.percentile(values, 100 * alpha / 2))
             ci_results[f"{metric_name}_ci_upper"] = float(np.percentile(values, 100 * (1 - alpha / 2)))
-
         except Exception as e:
             print(f"Error calculating CI for metric '{metric_name}': {e}")
-            # Continue to the next metric if calculation fails for one
 
     return ci_results
 
-# ===================== Main Evaluation Orchestration Function =====================
+#===================== Visualization Functions =====================
 
+def plot_uncertainty_metric(uncertainty_values: np.ndarray,
+                            uq_name: str,
+                            metric_name: str,
+                            output_dir: str = "./uq_plots",
+                            title: Optional[str] = None,
+                            max_samples: int = 5000):
+    """Visualize uncertainty metric over samples using a line plot (better for large N)."""
+    os.makedirs(output_dir, exist_ok=True)
+    n_samples_total = len(uncertainty_values)
+
+    indices = np.arange(n_samples_total)
+    plot_data = uncertainty_values
+
+    if n_samples_total > max_samples:
+        idx_sample = np.random.choice(n_samples_total, max_samples, replace=False)
+        idx_sample.sort()
+        plot_data = uncertainty_values[idx_sample]
+        indices = indices[idx_sample]
+        print(f"Warning: Plotting line plot for {max_samples} random samples out of {n_samples_total}.")
+
+    plt.figure(figsize=(15, 4))
+    plt.plot(indices, plot_data, alpha=0.7)
+    final_title = title or f"{metric_name} over Samples - {uq_name}"
+    plt.title(final_title)
+    plt.xlabel("Sample Index (Subsampled)" if n_samples_total > max_samples else "Sample Index")
+    plt.ylabel(metric_name)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"line_{metric_name}_{uq_name}.png"), bbox_inches='tight')
+    plt.close()
+
+
+def plot_class_uncertainties(class0_unc: float, class1_unc: float, uq_name: str, output_dir: str = "./uq_plots"):
+    """Visualize class-specific mean uncertainties using a bar chart."""
+    os.makedirs(output_dir, exist_ok=True)
+    plt.figure(figsize=(6, 5)) # Adjusted size
+    labels = ['Normal (0)', 'Apnea/Hypopnea (1)']
+    values = [class0_unc, class1_unc]
+    bars = plt.bar(labels, values, color=['skyblue', 'salmon'])
+    plt.bar_label(bars, fmt='%.6f') # Add values on bars
+    plt.title(f"Mean Predictive Variance by True Class - {uq_name}")
+    plt.ylabel("Mean Predictive Variance")
+    plt.ylim(bottom=0) # Ensure y-axis starts at 0
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"bar_class_variance_{uq_name}.png"), bbox_inches='tight')
+    plt.close()
+
+
+def plot_metric_distribution(metric_values: np.ndarray, y_true: np.ndarray, uq_name: str, metric_name: str, output_dir: str = "./uq_plots", bins: int = 30):
+    """Plot distribution of a per-sample metric, separated by true class."""
+    os.makedirs(output_dir, exist_ok=True)
+    plt.figure(figsize=(10, 6))
+    # Plot histograms for each class if samples exist for both
+    if np.any(y_true == 0):
+        plt.hist(metric_values[y_true == 0], bins=bins, alpha=0.6, label='True Normal (0)', density=True)
+    if np.any(y_true == 1):
+        plt.hist(metric_values[y_true == 1], bins=bins, alpha=0.6, label='True Apnea/Hypopnea (1)', density=True)
+
+    plt.title(f"{metric_name} Distribution by True Class - {uq_name}")
+    plt.xlabel(f"{metric_name} Value")
+    plt.ylabel("Density")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"hist_{metric_name}_by_class_{uq_name}.png"), bbox_inches='tight')
+    plt.close()
+
+# ===================== Main Evaluation Function =====================
 def evaluate_uq_methods(
-        predictions: np.ndarray, # Expected shape (n_models_or_passes, n_samples, n_outputs)
-        y_true: np.ndarray,     # Expected shape (n_samples,)
+        predictions: np.ndarray,
+        y_test: np.ndarray,
         evaluation_label: str = "UQ Evaluation",
-        n_bootstrap: int = DEFAULT_N_BOOTSTRAP,
-        random_state: Optional[int] = None
-) -> Optional[Dict[str, Any]]:
+        n_bootstrap: int = 100,
+        random_state: Optional[int] = None,
+        output_plot_dir: str = "./uq_plots"
+) -> Optional[Dict]:
     """
-    Complete uncertainty quantification evaluation pipeline .
-
-    Calculates per-sample and aggregate UQ metrics and computes confidence intervals
-    via bootstrapping. Does NOT generate visualizations or save per-window CSVs.
+    Complete uncertainty quantification evaluation pipeline. Calculates metrics,
+    computes confidence intervals via bootstrapping, and generates visualizations.
 
     Args:
-        predictions: Array of predictions from multiple passes/models.
-                     Expected shape: (n_models_or_passes, n_samples, n_outputs).
-                     Values assumed to be probability of positive class (1), in [0, 1].
-                     For multi-class, n_outputs > 1.
-        y_true: Ground truth labels. Expected shape: (n_samples,).
-        evaluation_label: Name for this evaluation run (e.g., "CNN MC Dropout Unbalanced").
-        n_bootstrap: Number of bootstrap samples for CI calculation. Set to 0 to skip CI computation.
-        random_state: Seed for bootstrap reproducibility.
+        predictions (np.ndarray): Array of predictions from multiple passes/models.
+                                  Shape: (n_models_or_passes, n_samples) or (..., 1).
+                                  Values assumed to be probability of positive class (1).
+        y_test (np.ndarray): Ground truth labels. Shape: (n_samples,).
+        evaluation_label (str): Name for this evaluation run (e.g., "CNN MC Dropout Unbalanced").
+        n_bootstrap (int): Number of bootstrap samples for CI calculation.
+        random_state (Optional[int]): Seed for bootstrap reproducibility.
+        output_plot_dir (str): Directory to save generated plots.
 
     Returns:
-        Dictionary containing aggregated UQ metrics and their confidence intervals (if n_bootstrap > 0).
-        Returns None if evaluation fails.
-        The keys in the dictionary include:
-        - Basic aggregates: 'overall_mean_pred_variance', 'overall_mean_total_pred_entropy', etc.
-        - Bootstrap means: '{metric_name}_mean' (if n_bootstrap > 0)
-        - Bootstrap CIs: '{metric_name}_ci_lower', '{metric_name}_ci_upper' (if n_bootstrap > 1)
+        Dictionary containing aggregated metrics and CIs, or None if evaluation fails.
+        Note: Per-sample metrics are calculated but not returned in the final dict,
+              only their aggregates and distributions are used/plotted.
     """
-    print(f"\n=== Evaluating Uncertainty: {evaluation_label} (No Plotting) ===")
-    print(f"Input prediction shape: {predictions.shape}, Samples: {len(y_true)}")
+    print(f"\n=== Evaluating Uncertainty: {evaluation_label} ===")
+    print(f"Input prediction shape: {predictions.shape}, Samples: {len(y_test)}")
 
     # --- Input Validation ---
-    if predictions is None or y_true is None:
+    if predictions is None or y_test is None:
         print("Error: Input predictions or labels are None.")
         return None
+    if len(y_test) != predictions.shape[1]:
+        raise ValueError(f"Mismatch between prediction samples ({predictions.shape[1]}) and label samples ({len(y_test)})")
 
-    # Ensure predictions shape is suitable
-    if predictions.ndim < 2:
-        print(f"Error: Unexpected prediction shape {predictions.shape}. Expected at least 2D.")
-        return None
-    if predictions.shape[1] != len(y_true):
-        print(f"Error: Mismatch between prediction samples ({predictions.shape[1]}) and label samples ({len(y_true)}).")
-        return None
-    if predictions.shape[1] == 0:
-        print("Warning: No samples to evaluate UQ metrics on.")
-        return {} # Return empty dict if no samples
+    # --- Dimension Handling ---
+    if predictions.ndim == 3 and predictions.shape[-1] == 1:
+        predictions = predictions[..., 0] # Remove trailing dimension of size 1
+    if predictions.ndim == 1:
+        predictions = predictions.reshape(1, -1) # Ensure 2D
 
-    n_passes_or_models = predictions.shape[0]
-    n_samples = predictions.shape[1]
-    n_outputs = predictions.shape[2] if predictions.ndim > 2 else 1
-
-    if n_passes_or_models == 0:
-        print("Warning: No prediction passes/models provided for UQ metrics calculation.")
-        # Calculate basic aggregates that are possible (which is basically nothing meaningful)
-        # and return an empty dictionary or N/A values if preferred.
-        # Let's return an empty dict as no calculation is possible.
-        return {}
-
-
-    # --- Core Metrics Calculation (Per-Sample) ---
-    print("\nCalculating per-sample UQ metrics...")
-    # uq_evaluation_dist expects (n_passes/models, n_samples, n_outputs)
-    uq_metrics_per_sample = uq_evaluation_dist(predictions, y_true)
+    # --- Core Metrics Calculation ---
+    print("\nCalculating base UQ metrics...")
+    uq_metrics_per_sample = uq_evaluation_dist(predictions, y_test)
 
     if uq_metrics_per_sample is None:
-        print("Error: Failed to calculate per-sample UQ metrics.")
+        print("Error: Failed to calculate base UQ metrics.")
         return None
 
-    # Calculate and report basic aggregate metrics from the per-sample results
-    overall_mean_pred_variance = float(np.mean(uq_metrics_per_sample.get('pred_variance', np.nan))) if uq_metrics_per_sample.get('pred_variance') is not None else np.nan
-    mean_variance_class_0 = float(np.mean(uq_metrics_per_sample['pred_variance'][y_true == 0])) if uq_metrics_per_sample.get('pred_variance') is not None and np.any(y_true == 0) else np.nan
-    mean_variance_class_1 = float(np.mean(uq_metrics_per_sample['pred_variance'][y_true == 1])) if uq_metrics_per_sample.get('pred_variance') is not None and np.any(y_true == 1) else np.nan
-    overall_mean_total_pred_entropy = float(np.mean(uq_metrics_per_sample.get('total_pred_entropy', np.nan))) if uq_metrics_per_sample.get('total_pred_entropy') is not None else np.nan
-    overall_mean_expected_aleatoric_entropy = float(np.mean(uq_metrics_per_sample.get('expected_aleatoric_entropy', np.nan))) if uq_metrics_per_sample.get('expected_aleatoric_entropy') is not None else np.nan
-    overall_mean_mutual_information = float(np.mean(uq_metrics_per_sample.get('mutual_info', np.nan))) if uq_metrics_per_sample.get('mutual_info') is not None else np.nan
+    # Report mean of per-sample metrics
+    print(f"- Overall Mean Variance: {uq_metrics_per_sample['overall_mean_variance']:.6f}")
+    print(f"- Mean Variance Class 0: {uq_metrics_per_sample['mean_variance_class_0']:.6f}")
+    print(f"- Mean Variance Class 1: {uq_metrics_per_sample['mean_variance_class_1']:.6f}")
+    print(f"- Mean Predictive Entropy (Total): {np.mean(uq_metrics_per_sample['total_pred_entropy']):.4f}")
+    print(f"- Mean Expected Entropy (Aleatoric): {np.mean(uq_metrics_per_sample['expected_aleatoric_entropy']):.4f}")
+    print(f"- Mean Mutual Info (Epistemic): {np.mean(uq_metrics_per_sample['mutual_info']):.6f}")
 
-    print(f"- Overall Mean Variance (basic): {overall_mean_pred_variance:.6f}")
-    print(f"- Mean Variance True Class 0 (basic): {mean_variance_class_0:.6f}")
-    print(f"- Mean Variance True Class 1 (basic): {mean_variance_class_1:.6f}")
-    print(f"- Overall Mean Predictive Entropy (Total, basic): {overall_mean_total_pred_entropy:.4f}")
-    print(f"- Overall Mean Expected Aleatoric Entropy (basic): {overall_mean_expected_aleatoric_entropy:.4f}")
-    print(f"- Overall Mean Mutual Info (Epistemic, basic): {overall_mean_mutual_information:.6f}")
+    # --- Confidence Intervals ---
+    print(f"\nComputing CIs (n_bootstrap={n_bootstrap})...")
+    start_time = time.time()
+    # Pass the raw predictions for bootstrapping
+    bootstrap_results = bootstrap_metrics(predictions, y_test, n_bootstrap, random_state)
 
+    final_metrics_aggregated = {} # Dictionary to store aggregated results and CIs
+    if bootstrap_results:
+        ci_metrics = compute_confidence_intervals(bootstrap_results)
+        final_metrics_aggregated.update(ci_metrics) # Add CI bounds and CI means
+        print(f"CIs computed in {time.time()-start_time:.2f}s")
 
-    # --- Confidence Intervals (via Bootstrapping) ---
-    final_metrics_aggregated: Dict[str, Any] = {} # Dictionary to store aggregated results and CIs
-
-    if n_bootstrap > 0 and predictions.shape[1] > 0: # Only run bootstrap if positive and samples exist
-        print(f"\nComputing CIs (n_bootstrap={n_bootstrap}, random_state={random_state})...")
-        start_time_ci = time.time()
-        # Pass the 2D predictions (n_passes/models, n_samples) to bootstrap_metrics
-        # uq_evaluation_dist expects (n_passes/models, n_samples, 1) -> add the dim back temporarily for it
-        # Need to handle multi-output prediction case for bootstrapping if relevant
-        if predictions.ndim == 3 and predictions.shape[2] > 1:
-            print("Warning: Input predictions are multi-output (e.g., multi-class probabilities). Bootstrapping logic may need adjustment for multi-output metrics.")
-            # Proceeding assuming bootstrap_metrics handles the structure or focuses on scalar aggregates
-
-
-        # Bootstrap works on samples, so it needs the predictions per sample (n_passes/models, n_samples, n_outputs)
-        # Convert predictions back to (n_passes/models, n_samples) for bootstrap_metrics if needed, assuming binary.
-        # Based on bootstrap_metrics expecting (n_passes/models, n_samples), let's pass the squeezed version.
-        if predictions.ndim == 3 and predictions.shape[2] == 1:
-            predictions_for_bootstrap = predictions.squeeze(-1) # Shape (n_passes/models, n_samples)
-        else:
-            # For multi-output, the shape passed to bootstrap_metrics might need review
-            predictions_for_bootstrap = predictions # Pass as is
-
-
-        bootstrap_results = bootstrap_metrics(predictions_for_bootstrap, y_true, n_bootstrap, random_state)
-
-        if bootstrap_results:
-            print(f"Successfully generated {len(bootstrap_results)} bootstrap samples.")
-            # Compute CIs from the collected bootstrap results
-            ci_metrics = compute_confidence_intervals(bootstrap_results, alpha=DEFAULT_ALPHA)
-            final_metrics_aggregated.update(ci_metrics) # Add CI bounds and CI means (e.g., 'metric_mean', 'metric_ci_lower/upper')
-
-            print(f"Confidence Intervals computed in {time.time()-start_time_ci:.2f}s")
-
-            # Add the basic overall mean metrics to the final dictionary with standard keys
-            # These might be slightly different from the bootstrap means ('metric_mean')
-            # Include all basic aggregate metrics
-            final_metrics_aggregated['overall_mean_pred_variance'] = overall_mean_pred_variance
-            final_metrics_aggregated['mean_variance_class_0'] = mean_variance_class_0
-            final_metrics_aggregated['mean_variance_class_1'] = mean_variance_class_1
-            final_metrics_aggregated['overall_mean_total_pred_entropy'] = overall_mean_total_pred_entropy
-            final_metrics_aggregated['overall_mean_expected_aleatoric_entropy'] = overall_mean_expected_aleatoric_entropy
-            final_metrics_aggregated['overall_mean_mutual_information'] = overall_mean_mutual_information
-
-
-        else:
-            print("Warning: Bootstrap failed or returned no results. CIs not computed.")
-            # Store just the basic aggregate metrics if bootstrap fails
-            final_metrics_aggregated['overall_mean_pred_variance'] = overall_mean_pred_variance
-            final_metrics_aggregated['mean_variance_class_0'] = mean_variance_class_0
-            final_metrics_aggregated['mean_variance_class_1'] = mean_variance_class_1
-            final_metrics_aggregated['overall_mean_total_pred_entropy'] = overall_mean_total_pred_entropy
-            final_metrics_aggregated['overall_mean_expected_aleatoric_entropy'] = overall_mean_expected_aleatoric_entropy
-            final_metrics_aggregated['overall_mean_mutual_information'] = overall_mean_mutual_information
-
+        # Add non-CI aggregated metrics calculated earlier for completeness
+        final_metrics_aggregated['overall_mean_variance'] = uq_metrics_per_sample['overall_mean_variance']
+        final_metrics_aggregated['mean_variance_class_0'] = uq_metrics_per_sample['mean_variance_class_0']
+        final_metrics_aggregated['mean_variance_class_1'] = uq_metrics_per_sample['mean_variance_class_1']
+        final_metrics_aggregated['mean_total_pred_entropy'] = np.mean(uq_metrics_per_sample['total_pred_entropy'])
+        final_metrics_aggregated['mean_expected_aleatoric_entropy'] = np.mean(uq_metrics_per_sample['expected_aleatoric_entropy'])
+        final_metrics_aggregated['mean_mutual_info'] = np.mean(uq_metrics_per_sample['mutual_info'])
 
     else:
-        print("\nSkipping CI computation: n_bootstrap is 0 or negative, or no samples available.")
-        # Store just the basic aggregate metrics
-        final_metrics_aggregated['overall_mean_pred_variance'] = overall_mean_pred_variance
-        final_metrics_aggregated['mean_variance_class_0'] = mean_variance_class_0
-        final_metrics_aggregated['mean_variance_class_1'] = mean_variance_class_1
-        final_metrics_aggregated['overall_mean_total_pred_entropy'] = overall_mean_total_pred_entropy
-        final_metrics_aggregated['overall_mean_expected_aleatoric_entropy'] = overall_mean_expected_aleatoric_entropy
-        final_metrics_aggregated['overall_mean_mutual_information'] = overall_mean_mutual_information
+        print("Warning: Bootstrap failed, CIs not computed.")
+        # Store just the aggregate metrics if bootstrap fails
+        final_metrics_aggregated['overall_mean_variance'] = uq_metrics_per_sample['overall_mean_variance']
+        final_metrics_aggregated['mean_variance_class_0'] = uq_metrics_per_sample['mean_variance_class_0']
+        final_metrics_aggregated['mean_variance_class_1'] = uq_metrics_per_sample['mean_variance_class_1']
+        final_metrics_aggregated['mean_total_pred_entropy'] = np.mean(uq_metrics_per_sample['total_pred_entropy'])
+        final_metrics_aggregated['mean_expected_aleatoric_entropy'] = np.mean(uq_metrics_per_sample['expected_aleatoric_entropy'])
+        final_metrics_aggregated['mean_mutual_info'] = np.mean(uq_metrics_per_sample['mutual_info'])
 
 
-    print(f"\n=== Evaluation Complete: {evaluation_label} ===")
-    # Return the dictionary containing aggregated metrics and CIs
+    # --- Visualizations ---
+    print("\nGenerating visualizations...")
+    # Plotting per-sample distributions or values
+    plot_metric_distribution(
+        uq_metrics_per_sample["pred_variance"], y_test, evaluation_label, "Predictive Variance", output_dir=output_plot_dir
+    )
+    plot_metric_distribution(
+        uq_metrics_per_sample["total_pred_entropy"], y_test, evaluation_label, "Predictive Entropy", output_dir=output_plot_dir
+    )
+    plot_metric_distribution(
+        uq_metrics_per_sample["mutual_info"], y_test, evaluation_label, "Mutual Information", output_dir=output_plot_dir
+    )
+
+    # Plotting aggregate/class metrics (use values from final_metrics_aggregated)
+    plot_class_uncertainties(
+        final_metrics_aggregated["mean_variance_class_0"], # Use direct aggregate value
+        final_metrics_aggregated["mean_variance_class_1"],
+        evaluation_label,
+        output_dir=output_plot_dir
+    )
+
+    print("\n=== Evaluation Complete ===")
+    # Return aggregated metrics and CIs
     return final_metrics_aggregated
 
+# Example Usage:
 # ===================== Example Usage =====================
-# The if __name__ == '__main__': block contains example code to demonstrate
-# how the evaluate_uq_methods function can be used with dummy data.
-# This block is only executed when the script is run directly.
-
 if __name__ == '__main__':
-    print("Running UQ Techniques Script Demo (No Plotting)...")
+    # This block is for demonstration/testing purposes
+
+    print("Running UQ Evaluation Demo...")
 
     # --- Generate Dummy Data ---
-    N_MODELS_OR_PASSES = 5
+    N_MODELS = 5
     N_SAMPLES = 1000
-    N_OUTPUTS = 1 # Binary classification
     RANDOM_SEED = 42
     np.random.seed(RANDOM_SEED)
-    tf.random.set_seed(RANDOM_SEED) # Set TF seed if dummy model is used
-
-    print(f"\nGenerating dummy data for {N_SAMPLES} samples from {N_MODELS_OR_PASSES} sources...")
 
     # Simulate predictions (probabilities for class 1)
-    # Shape needs to be (n_sources, n_samples, n_outputs) -> (N_MODELS_OR_PASSES, N_SAMPLES, 1)
-    dummy_predictions_3d = np.random.rand(N_MODELS_OR_PASSES, N_SAMPLES, N_OUTPUTS)
+    # Let's assume higher variance for class 1
+    dummy_preds = []
+    for _ in range(N_MODELS):
+        p = np.random.rand(N_SAMPLES) * 0.6 + 0.2 # Base probabilities centered around 0.5
+        noise = np.random.randn(N_SAMPLES) * 0.1 # Model noise
+        p_noisy = np.clip(p + noise, 0.01, 0.99)
+        dummy_preds.append(p_noisy)
+    dummy_predictions = np.stack(dummy_preds) # Shape (N_MODELS, N_SAMPLES)
 
     # Simulate true labels (imbalanced)
-    dummy_true_labels = (np.random.rand(N_SAMPLES) > 0.7).astype(int) # ~30% class 1
+    true_labels = (np.random.rand(N_SAMPLES) > 0.7).astype(int) # ~30% class 1
 
-    print(f"Generated dummy data: Predictions shape {dummy_predictions_3d.shape}, Labels shape {dummy_true_labels.shape}")
-    print(f"Dummy label distribution:\n{pd.Series(dummy_true_labels).value_counts(normalize=True)}")
+    print(f"\nGenerated dummy data: Predictions shape {dummy_predictions.shape}, Labels shape {true_labels.shape}")
+    print(f"Dummy label distribution:\n{pd.Series(true_labels).value_counts(normalize=True)}")
 
 
-    # --- Run Evaluation using evaluate_uq_methods ---
-    # Note: The example directly calls evaluate_uq_methods.
-    # In your main evaluation scripts (evaluate_deep_ensemble.py, evaluate_mc_dropout.py),
-    # you would first call deep_ensembles_predict or mc_dropout_predict to get the
-    # predictions array, then pass that array to evaluate_uq_methods.
-
-    print("\n--- Running evaluate_uq_methods with dummy data (No Plotting) ---")
-    dummy_uq_results_aggregated = evaluate_uq_methods(
-        predictions=dummy_predictions_3d, # Pass the 3D dummy predictions
-        y_true=dummy_true_labels,
-        evaluation_label="Dummy UQ Evaluation Demo",
-        n_bootstrap=50, # Use fewer bootstraps for demo speed
-        random_state=RANDOM_SEED
+    # --- Run Evaluation ---
+    uq_results = evaluate_uq_methods(
+        predictions=dummy_predictions,
+        y_test=true_labels,
+        evaluation_label="Dummy Ensemble Test",
+        n_bootstrap=50, # Use fewer bootstraps for demo
+        random_state=RANDOM_SEED,
+        output_plot_dir="../Alarcon_SHHS/dummy_uq_plots"
     )
 
     # --- Print Aggregated Results ---
-    if dummy_uq_results_aggregated:
-        print("\n--- Aggregated UQ Results (from evaluate_uq_methods) ---")
-        # Print all key-value pairs in the returned dictionary
-        for key, value in dummy_uq_results_aggregated.items():
-            # Format float values
-            if isinstance(value, float) or isinstance(value, np.number):
+    if uq_results:
+        print("\n--- Aggregated UQ Results ---")
+        for key, value in uq_results.items():
+            if isinstance(value, (int, float, np.number)): # Check if it's a scalar number
                 print(f"{key}: {value:.6f}")
-            else:
-                print(f"{key}: {value}")
-
+            # Optionally print CI bounds if needed here too
+            # else:
+            #     print(f"{key}: (Array or other type)") # Handle non-scalar if any remain
 
     else:
-        print("\nUQ Evaluation demo failed.")
+        print("\nUQ Evaluation failed.")
 
-    print("\nDemo finished.")
+    print("\nDemo finished. Check the 'dummy_uq_plots' directory for visualizations.")
