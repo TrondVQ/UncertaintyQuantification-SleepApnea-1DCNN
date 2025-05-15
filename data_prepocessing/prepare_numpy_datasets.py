@@ -42,7 +42,6 @@ It performs the following key steps:
 Configuration paths and parameters can be adjusted via command-line arguments.
 Includes safety checks for data sufficiency and handles exceptions during balancing steps.
 """
-
 # --- Configuration ---
 # Define default paths and parameters (can be overridden by command-line args)
 SHHS2_CSV_ALL = "./SHHS2_ID_all.csv" # Assumes 60s windows
@@ -232,6 +231,7 @@ def prepare_final_datasets(input_csv, output_dir, test_size, seed):
 
         # Unbalanced Test set (Window Std)
         np.save(os.path.join(output_dir, 'X_test_win_std_unbalanced.npy'), X_test_std_win)
+
         np.save(os.path.join(output_dir, 'y_test_unbalanced.npy'), y_test.values)
         #patient IDs for unbalanced test set
         np.save(os.path.join(output_dir, 'patient_ids_test_unbalanced.npy'), groups_test.values) 

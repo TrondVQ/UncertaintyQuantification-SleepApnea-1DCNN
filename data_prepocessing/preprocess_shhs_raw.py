@@ -40,7 +40,6 @@ Alarcon et al. Preprocessing Details (adapted for this script):
   event for at least 10 seconds. Otherwise, it is labeled as normal (0).
 """
 
-
 # Paths to folders
 EDF_FOLDER =  ""  #"../SHHS2_dataset/edf_files"
 XML_FOLDER = ""   #"../SHHS2_dataset/annotation_files"

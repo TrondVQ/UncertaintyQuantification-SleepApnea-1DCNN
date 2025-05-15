@@ -7,10 +7,13 @@ This repository contains the Python code for the Master's Thesis: "Uncertainty Q
 **Thesis Document:** TBA
 
 ## Abstract
+Obstructive Sleep Apnea (OSA) is a common sleep disorder with serious health consequences, yet its diagnosis relies on resource-intensive polysomnography and subjective manual scoring, which often leads to inter-scorer variability, limiting accessibility and consistency. Although deep learning models show promise for automating OSA event detection, their "black box" nature and lack of built-in reliability measures hinder clinical adoption.
 
-Obstructive Sleep Apnea (OSA) is a prevalent disorder with significant health consequences, yet its diagnosis is often hindered by resource-intensive polysomnography and variability in manual scoring. While deep learning models show promise for automated OSA event detection, their "black-box" nature and lack of inherent reliability measures limit clinical trust and adoption. This thesis addresses this gap by systematically investigating and comparing two prominent Uncertainty Quantification (UQ) techniques—Monte Carlo (MC) Dropout and Deep Ensembles (DE)—applied to a validated 1D-Convolutional Neural Network (1D-CNN) for epoch-level sleep apnea event classification using the Sleep Heart Health Study 2 (SHHS2) dataset.
+This thesis addresses this gap by systematically evaluating two prominent uncertainty quantification (UQ) techniques: Monte Carlo (MC) Dropout and Deep Ensembles (DE), applied to a validated 1D-Convolutional Neural Network (1D-CNN) for epoch-level sleep apnea event classification using the Sleep Heart Health Study 2 (SHHS2) dataset.
 
-This work involved replicating a benchmark 1D-CNN, implementing MCD and DE, and conducting a multi-level analysis of their uncertainty characteristics. Key findings reveal that while both methods can indicate prediction reliability, they exhibit distinct uncertainty profiles. Deep Ensembles demonstrated particular strength in identifying a large subset of predictions with very high accuracy and its uncertainty estimates showed a stronger correlation with patient-level accuracy. Conversely, MC Dropout, while more computationally efficient, yielded higher overall uncertainty estimates. Both methods confirmed that estimated aleatoric (data-related) uncertainty was dominant for this task, and a strong, statistically significant correlation was found between higher window-level uncertainty and increased prediction error. This research demonstrates the potential of UQ to enhance model transparency and support more reliable AI-assisted diagnostics in sleep medicine.
+Through replication of a benchmark 1D-CNN and a multi-level analysis of uncertainty characteristics, key findings reveal that both methods can indicate prediction reliability but exhibit distinct uncertainty profiles. DE demonstrated a superior ability to identify a large subset of predictions with very high accuracy (over 99\%), with its uncertainty estimates showing a stronger correlation with patient-level accuracy. MC Dropout, while more computationally efficient, produced higher overall uncertainty estimates and was more sensitive to test set imbalance. Both methods confirmed that aleatoric (data-related) uncertainty was dominant in this task, and higher window-level uncertainty strongly correlated with increased prediction error.
+
+These findings provide empirical evidence of the practical trade-offs between MC Dropout and Deep Ensembles for UQ in sleep apnea detection, highlighting their potential to improve model transparency, identify trustworthy predictions, and support more robust, clinically translatable AI tools for sleep medicine.
 
 ## Repository Structure
 
@@ -113,3 +116,4 @@ python uncertainty_quantification/analyze_mcd_patient_level.py
 # 4. Further Analysis (example for MCD results)
 python uncertainty_quantification/aggregate_patient_uq_metrics.py 
 # ... then run plotting scripts from uq_analysis/ using the generated CSVs
+

@@ -6,7 +6,7 @@ import io
 import numpy as np
 import argparse
 import os
-from typing import List, Dict, Any, NoReturn, Optional # Import types
+from typing import List, Dict, Any, Tuple, NoReturn, Optional # Import types
 
 # --- Configuration ---
 
