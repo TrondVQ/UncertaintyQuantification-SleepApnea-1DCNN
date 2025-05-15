@@ -299,8 +299,8 @@ if __name__ == "__main__":
 
         # Load data - check existence before loading
         if os.path.exists(X_test_unbalanced_path) and os.path.exists(y_test_unbalanced_path):
-            X_test_std_unbalanced = np.load(X_test_unbalanced_path)
-            y_test_unbalanced = np.load(y_test_unbalanced_path)
+            X_test_std_unbalanced = np.load(X_test_unbalanced_path, allow_pickle=True)
+            y_test_unbalanced = np.load(y_test_unbalanced_path, allow_pickle=True)
             print("Unbalanced test datasets loaded successfully.")
             print(f"X_test_std_unbalanced shape: {X_test_std_unbalanced.shape}") # Should be (samples, 60, 4)
             print(f"y_test_unbalanced shape: {y_test_unbalanced.shape}")
@@ -313,8 +313,8 @@ if __name__ == "__main__":
 
 
         if os.path.exists(X_test_rus_path) and os.path.exists(y_test_rus_path):
-            X_test_std_rus = np.load(X_test_rus_path)
-            y_test_rus = np.load(y_test_rus_path)
+            X_test_std_rus = np.load(X_test_rus_path, allow_pickle=True)
+            y_test_rus = np.load(y_test_rus_path, allow_pickle=True)
             print("Balanced (RUS) test datasets loaded successfully.")
             print(f"X_test_std_rus shape: {X_test_std_rus.shape}") # Should be (samples, 60, 4)
             print(f"y_test_rus shape: {y_test_rus.shape}")

@@ -365,9 +365,9 @@ def run_mc_dropout_evaluation(
 
         # Load the data - check existence before loading
         if os.path.exists(X_test_unbalanced_path) and os.path.exists(y_test_unbalanced_path) and os.path.exists(patient_ids_test_unbalanced_path):
-            X_test_std_unbalanced = np.load(X_test_unbalanced_path)
-            y_test_unbalanced = np.load(y_test_unbalanced_path)
-            patient_ids_test_unbalanced = np.load(patient_ids_test_unbalanced_path) # Load Patient IDs
+            X_test_std_unbalanced = np.load(X_test_unbalanced_path, allow_pickle=True)
+            y_test_unbalanced = np.load(y_test_unbalanced_path, allow_pickle=True)
+            patient_ids_test_unbalanced = np.load(patient_ids_test_unbalanced_path, allow_pickle=True) # Load Patient IDs
             print("Unbalanced test datasets loaded successfully.")
             print(f"X_test_std_unbalanced shape: {X_test_std_unbalanced.shape}")
             print(f"y_test_unbalanced shape: {y_test_unbalanced.shape}")
@@ -380,8 +380,8 @@ def run_mc_dropout_evaluation(
 
 
         if os.path.exists(X_test_rus_path) and os.path.exists(y_test_rus_path):
-            X_test_std_rus = np.load(X_test_rus_path)
-            y_test_rus = np.load(y_test_rus_path)
+            X_test_std_rus = np.load(X_test_rus_path, allow_pickle=True)
+            y_test_rus = np.load(y_test_rus_path, allow_pickle=True)
             print("Balanced (RUS) test datasets loaded successfully.")
             print(f"X_test_std_rus shape: {X_test_std_rus.shape}")
             print(f"y_test_rus shape: {y_test_rus.shape}")

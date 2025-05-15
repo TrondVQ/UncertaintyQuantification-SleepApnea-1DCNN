@@ -372,14 +372,14 @@ def run_ensemble_evaluation(
 
 
         # Load the data
-        X_test_std_unbalanced: np.ndarray = np.load(X_test_unbalanced_path)
-        y_test_unbalanced: np.ndarray = np.load(y_test_unbalanced_path)
-        patient_ids_test_unbalanced: np.ndarray = np.load(patient_ids_test_unbalanced_path) # Load Patient IDs
+        X_test_std_unbalanced: np.ndarray = np.load(X_test_unbalanced_path, allow_pickle=True)
+        y_test_unbalanced: np.ndarray = np.load(y_test_unbalanced_path, allow_pickle=True)
+        patient_ids_test_unbalanced: np.ndarray = np.load(patient_ids_test_unbalanced_path, allow_pickle=True) # Load Patient IDs
 
         # Load Balanced (RUS) Test Set
-        X_test_std_rus: np.ndarray = np.load(X_test_rus_path)
-        y_test_rus: np.ndarray = np.load(y_test_rus_path)
-        # patient_ids_test_rus = np.load(os.path.join(processed_data_dir, 'patient_ids_test_rus.npy')) # Load if available and needed
+        X_test_std_rus: np.ndarray = np.load(X_test_rus_path, allow_pickle=True)
+        y_test_rus: np.ndarray = np.load(y_test_rus_path, allow_pickle=True)
+        # patient_ids_test_rus = np.load(os.path.join(processed_data_dir, 'patient_ids_test_rus.npy', allow_pickle=True)) # Load if available and needed
 
         print("Test datasets loaded successfully.")
         print(f"X_test_std_unbalanced shape: {X_test_std_unbalanced.shape}")
