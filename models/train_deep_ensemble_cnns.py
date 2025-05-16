@@ -11,7 +11,7 @@ import argparse
 
 # --- Configuration ---
 SEED_BASE = 2025
-NUM_MODELS_TO_TRAIN = 5 #already have 5 trained
+NUM_MODELS_TO_TRAIN = 5
 PROCESSED_DATA_DIR = "./processed_datasets"
 MODEL_SAVE_DIR_CNN = "./models/ensemble_cnn_no_pool"
 NUM_EPOCHS = 50
@@ -77,7 +77,6 @@ def al_1d_cnn_create_model(input_shape_arg):
     return model
 
 
-#python3 de_train_cnn.py > 0205_de_ensemble_train.txt
 # --- Main Training Function ---
 def train_ensemble(model_type: str, num_models: int, seed_base: int):
     """Trains an ensemble of models with different random seeds, validation, and early stopping."""
